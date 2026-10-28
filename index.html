@@ -251,13 +251,17 @@ $('phone').addEventListener('input', e => {
   e.target.value = fmtPhone(d);
   $('btnSearch').disabled = d.length !== 10;
   $('searchMsg').textContent = '';
+  if(d.length === 10 && !searching) doSearch();   // ครบ 10 หลัก = ค้นหาอัตโนมัติ ไม่ต้องกดปุ่ม
 });
 $('phone').addEventListener('keydown', e => { if(e.key === 'Enter' && !$('btnSearch').disabled) doSearch(); });
 $('btnSearch').onclick = doSearch;
 
+let searching = false;
 async function doSearch(){
   const d = digits($('phone').value);
   if(d.length !== 10){ $('searchMsg').textContent = 'กรุณาใส่เบอร์ให้ครบ 10 หลัก'; return; }
+  if(searching) return;
+  searching = true;
   busy($('btnSearch'), true, 'Searching');
   try{
     const r = await api('lookup', {phone:d});
@@ -269,7 +273,7 @@ async function doSearch(){
     }
     openForm(r);
   }catch(e){ $('searchMsg').textContent = e.message; }
-  finally{ busy($('btnSearch'), false); $('btnSearch').disabled = digits($('phone').value).length !== 10; }
+  finally{ searching = false; busy($('btnSearch'), false); $('btnSearch').disabled = digits($('phone').value).length !== 10; }
 }
 
 /* ===== FORM ===== */
