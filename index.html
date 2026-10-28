@@ -77,6 +77,12 @@ select.field:invalid{color:#aab1c2}
 .done span{font-size:14px;color:#56607a}
 @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
 
+.sync{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:25;display:none;align-items:center;gap:10px;
+  max-width:calc(100% - 24px);background:#fff;color:var(--ink);border-radius:999px;padding:8px 14px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.sync.on{display:flex}
+.sync.err{background:#ffe3df;color:#7a1d12;border-radius:14px}
+.sync button{border:0;background:var(--navy);color:#fff;font:inherit;font-size:12px;border-radius:999px;padding:5px 10px;cursor:pointer}
+.sync button.ghost{background:transparent;color:inherit;text-decoration:underline;padding:5px 4px}
 .demo{position:fixed;top:0;left:0;right:0;z-index:30;background:var(--cream);color:#5a4416;font-size:12px;text-align:center;padding:5px 10px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -117,6 +123,7 @@ select.field:invalid{color:#aab1c2}
     </form>
   </section>
 
+  <div class="sync" id="sync"></div>
   <div class="done" id="done"><div class="box"><div class="tick">✓</div><b id="doneTitle">บันทึกแล้ว</b><span id="doneSub"></span></div></div>
 </div>
 
@@ -128,6 +135,7 @@ const LOGO_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAAFACAYAAADN
 const DEMO = !/^https:\/\/script\.google\.com\//.test(API_URL);
 const $ = id => document.getElementById(id);
 let current = null;
+let queue = [];
 
 /* ===== โลโก้ + คลื่น ===== */
 const LOGO_SVG = `<svg viewBox="0 0 150 150" width="100%" height="100%">
@@ -177,13 +185,14 @@ function digits(s){ return String(s || '').replace(/\D/g, ''); }
 function fmtPhone(d){ return [d.slice(0,3), d.slice(3,6), d.slice(6,10)].filter(Boolean).join(' '); }
 
 /* รหัสเครื่อง: เปิดลิงก์ร้าน ...?key=รหัส ครั้งเดียว เครื่องจะจำไว้ (ไม่มีหน้าใส่ PIN) */
-function getKey(){ try{ return localStorage.getItem('osh_key') || window._key || ''; }catch(e){ return window._key || ''; } }
+const ACCESS_KEY = '2468';   // ต้องตรงกับ ACCESS_PIN ใน Code.gs — ทุกเครื่องใช้งานได้ทันที ไม่ต้องเปิดลิงก์ ?key=
+function getKey(){ try{ return localStorage.getItem('osh_key') || window._key || ACCESS_KEY; }catch(e){ return window._key || ACCESS_KEY; } }
 function setKey(v){ window._key = v; try{ localStorage.setItem('osh_key', v); }catch(e){} }
 (function(){
   const k = new URLSearchParams(location.search).get('key');
   if(k){ setKey(k); try{ history.replaceState(null, '', location.pathname); }catch(e){} }
 })();
-const NO_ACCESS = 'เครื่องนี้ยังไม่ได้เปิดสิทธิ์ — เปิดลิงก์ของร้าน (มี ?key=) 1 ครั้ง';
+const NO_ACCESS = 'รหัสไม่ตรงกับระบบ — ตรวจ ACCESS_KEY ใน index.html ให้ตรงกับ ACCESS_PIN ใน Code.gs';
 
 /* ===== รายการราคา (มาจาก dropdown ในชีต) ===== */
 const DEFAULT_PRICES = ['1299', '999', '789', '629', 'A la carte'];
@@ -207,8 +216,9 @@ async function api(action, payload){
       headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify(Object.assign({action, pin:getKey()}, payload))
     });
-  }catch(e){ throw new Error('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ต'); }
-  const j = await res.json();
+  }catch(e){ const err = new Error('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ต'); err.network = true; throw err; }
+  let j;
+  try{ j = await res.json(); }catch(e){ const err = new Error('ระบบตอบกลับไม่ถูกต้อง'); err.network = true; throw err; }
   if(!j.ok){
     if(j.error === 'PIN ไม่ถูกต้อง') throw new Error(NO_ACCESS);
     throw new Error(j.error || 'เกิดข้อผิดพลาด');
@@ -233,6 +243,11 @@ async function doSearch(){
   try{
     const r = await api('lookup', {phone:d});
     setPrices(r.prices);
+    const pend = queue.filter(q => digits(q.data.phone) === d);   // รายการที่ยังส่งไม่เสร็จของเบอร์นี้
+    if(pend.length){
+      r.nextVisit += pend.length;
+      if(r.isNew){ r.isNew = false; r.name = pend[pend.length - 1].data.name; }
+    }
     openForm(r);
   }catch(e){ $('searchMsg').textContent = e.message; }
   finally{ busy($('btnSearch'), false); $('btnSearch').disabled = digits($('phone').value).length !== 10; }
@@ -261,17 +276,63 @@ $('form').addEventListener('submit', async e => {
   if(!name){ m.textContent = 'กรุณากรอกชื่อ'; $('name').focus(); return; }
   if(!price){ m.textContent = 'กรุณาเลือก Price'; $('price').focus(); return; }
   if(!(pax >= 1 && pax <= 200)){ m.textContent = 'กรุณาใส่จำนวนลูกค้า'; $('pax').focus(); return; }
-  const btn = $('btnSave');
-  busy(btn, true, 'Saving');
-  try{
-    const r = await api('save', {data:{phone:current.phone, name, price, pax}});
-    $('doneTitle').textContent = 'บันทึกแล้ว';
-    $('doneSub').textContent = `${r.name} · ${r.visit === 1 ? 'ลูกค้าใหม่' : 'Visit ครั้งที่ ' + r.visit}`;
-    $('done').classList.add('on');
-    setTimeout(() => { $('done').classList.remove('on'); resetToSearch(); }, 1600);
-  }catch(err){ m.textContent = err.message; }
-  finally{ busy(btn, false); }
+  // บันทึกแบบไม่ต้องรอ: เข้าคิวในเครื่องทันที แล้วส่งขึ้น Sheet เบื้องหลัง (ส่งไม่สำเร็จจะลองใหม่เอง)
+  const v = current.nextVisit;
+  queue.push({id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), data:{phone:current.phone, name, price, pax}});
+  saveQueue();
+  flushQueue();
+  $('doneTitle').textContent = 'บันทึกแล้ว';
+  $('doneSub').textContent = `${name} · ${v === 1 ? 'ลูกค้าใหม่' : 'Visit ครั้งที่ ' + v}`;
+  $('done').classList.add('on');
+  setTimeout(() => { $('done').classList.remove('on'); resetToSearch(); }, 900);
 });
+
+/* ===== คิวบันทึก (เก็บในเครื่อง กันข้อมูลหายถ้าเน็ตหลุด) ===== */
+let sending = false, retryTimer = null;
+function loadQueue(){ try{ return JSON.parse(localStorage.getItem('osh_queue')) || []; }catch(e){ return []; } }
+function saveQueue(){ try{ localStorage.setItem('osh_queue', JSON.stringify(queue)); }catch(e){} renderSync(); }
+
+async function flushQueue(){
+  if(sending || !queue.length) return;
+  sending = true; clearTimeout(retryTimer); renderSync();
+  let network = false;
+  try{
+    while(queue.length){
+      const item = queue[0];
+      if(item.fatal) break;
+      try{
+        await api('save', {data:item.data});
+        queue.shift(); saveQueue();
+      }catch(e){
+        item.err = e.message;
+        network = e.network === true;
+        if(!network) item.fatal = true;           // ข้อมูลผิด/สิทธิ์ไม่ผ่าน → หยุดรอให้คนตัดสินใจ
+        saveQueue();
+        break;
+      }
+    }
+  }finally{ sending = false; renderSync(); }
+  if(network && queue.length) retryTimer = setTimeout(flushQueue, 5000);   // เน็ตหลุด → ลองใหม่ทุก 5 วิ
+}
+
+function renderSync(){
+  const el = $('sync');
+  if(!queue.length){ el.className = 'sync'; el.innerHTML = ''; return; }
+  const head = queue[0];
+  if(head.fatal){
+    el.className = 'sync on err';
+    el.innerHTML = `<span>⚠️ บันทึกไม่สำเร็จ: ${esc(head.data.name)} (${esc(head.data.phone)}) — ${esc(head.err || '')}</span>` +
+      `<button id="syncRetry">ลองใหม่</button><button class="ghost" id="syncDrop">ลบรายการนี้</button>`;
+    $('syncRetry').onclick = () => { head.fatal = false; saveQueue(); flushQueue(); };
+    $('syncDrop').onclick = () => { if(confirm('ลบรายการนี้ออก ไม่บันทึกลง Sheet?')){ queue.shift(); saveQueue(); flushQueue(); } };
+  }else{
+    el.className = 'sync on';
+    el.innerHTML = `<span class="spin"></span><span>${sending ? 'กำลังบันทึกลง Sheet' : 'รอส่ง (เน็ตไม่เสถียร)'} · ${queue.length} รายการ</span>`;
+  }
+}
+
+window.addEventListener('beforeunload', e => { if(queue.length){ e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('online', flushQueue);
 
 function resetToSearch(){
   current = null;
@@ -289,6 +350,9 @@ if(DEMO){
   b.textContent = 'โหมดทดลอง (ยังไม่เชื่อม Sheet) · ลองเบอร์ 011 111 1111 หรือเบอร์ใหม่';
   document.body.appendChild(b);
 }
+queue = loadQueue();
+renderSync();
+flushQueue();                                                          // ส่งรายการค้างจากครั้งก่อน (ถ้ามี)
 show('pSearch');
 $('phone').focus();
 api('ping').then(r => r && setPrices(r.prices))                      // ปลุกระบบ + ตรวจสิทธิ์ + โหลดราคาล่าสุด
