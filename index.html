@@ -251,12 +251,21 @@ $('phone').addEventListener('input', e => {
   e.target.value = fmtPhone(d);
   $('btnSearch').disabled = d.length !== 10;
   $('searchMsg').textContent = '';
-  if(d.length === 10 && !searching) doSearch();   // ครบ 10 หลัก = ค้นหาอัตโนมัติ ไม่ต้องกดปุ่ม
+  if(d.length === 10) startPrefetch(d);           // ครบ 10 หลัก = ค้นหารอไว้เงียบ ๆ แสดงผลเมื่อกด Search
 });
 $('phone').addEventListener('keydown', e => { if(e.key === 'Enter' && !$('btnSearch').disabled) doSearch(); });
 $('btnSearch').onclick = doSearch;
 
 let searching = false;
+let prefetch = null;                                 // ผลค้นหาที่รอไว้ {d, t, p}
+const PREFETCH_TTL = 60 * 1000;
+function startPrefetch(d){
+  if(prefetch && prefetch.d === d && Date.now() - prefetch.t < PREFETCH_TTL) return;
+  const p = api('lookup', {phone:d});
+  p.catch(() => {});                                 // ถ้าพลาด จะค้นใหม่ตอนกด Search
+  prefetch = {d, t:Date.now(), p};
+}
+
 async function doSearch(){
   const d = digits($('phone').value);
   if(d.length !== 10){ $('searchMsg').textContent = 'กรุณาใส่เบอร์ให้ครบ 10 หลัก'; return; }
@@ -264,7 +273,11 @@ async function doSearch(){
   searching = true;
   busy($('btnSearch'), true, 'Searching');
   try{
-    const r = await api('lookup', {phone:d});
+    let r;
+    const pf = (prefetch && prefetch.d === d && Date.now() - prefetch.t < PREFETCH_TTL) ? prefetch.p : null;
+    prefetch = null;
+    try{ r = pf ? await pf : await api('lookup', {phone:d}); }
+    catch(e){ if(!pf) throw e; r = await api('lookup', {phone:d}); }   // ผลที่รอไว้พลาด → ค้นใหม่ 1 ครั้ง
     setPrices(r.prices);
     const pend = queue.filter(q => digits(q.data.phone) === d);   // รายการที่ยังส่งไม่เสร็จของเบอร์นี้
     if(pend.length){
@@ -359,6 +372,7 @@ window.addEventListener('online', flushQueue);
 
 function resetToSearch(){
   current = null;
+  prefetch = null;
   $('phone').value = '';
   $('btnSearch').disabled = true;
   $('searchMsg').textContent = '';
