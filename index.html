@@ -278,7 +278,7 @@ $('form').addEventListener('submit', async e => {
   if(!(pax >= 1 && pax <= 200)){ m.textContent = 'กรุณาใส่จำนวนลูกค้า'; $('pax').focus(); return; }
   // บันทึกแบบไม่ต้องรอ: เข้าคิวในเครื่องทันที แล้วส่งขึ้น Sheet เบื้องหลัง (ส่งไม่สำเร็จจะลองใหม่เอง)
   const v = current.nextVisit;
-  queue.push({id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), data:{phone:current.phone, name, price, pax}});
+  queue.push({id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), data:{phone:current.phone, name, price, pax, ts:Date.now()}});   // ts = เวลาที่กด Save
   saveQueue();
   flushQueue();
   $('doneTitle').textContent = 'บันทึกแล้ว';
