@@ -136,6 +136,23 @@ const DEMO = !/^https:\/\/script\.google\.com\//.test(API_URL);
 const $ = id => document.getElementById(id);
 let current = null;
 let queue = [];
+let lastContact = 0;
+
+/* ===== กัน Apps Script "หลับ": ปลุกล่วงหน้าก่อนพนักงานกด Search ===== */
+const KEEP_WARM_MIN = 4;                     // ส่งสัญญาณทุก 4 นาทีขณะเปิดหน้าเว็บในเวลาทำการ
+const OPEN_FROM = '10:30', OPEN_TO = '22:30';
+function inOpenHours(){
+  const n = new Date(), t = n.getHours() * 60 + n.getMinutes();
+  const m = s => { const [h, mm] = s.split(':').map(Number); return h * 60 + mm; };
+  return t >= m(OPEN_FROM) && t <= m(OPEN_TO);
+}
+function warm(showErr){
+  if(DEMO) return;
+  if(Date.now() - lastContact < 60 * 1000) return;   // เพิ่งคุยกับระบบไปแล้ว ไม่ต้องปลุกซ้ำ
+  lastContact = Date.now();
+  api('ping').then(r => r && setPrices(r.prices))
+    .catch(e => { lastContact = 0; if(showErr) $('searchMsg').textContent = e.message; });
+}
 
 /* ===== โลโก้ + คลื่น ===== */
 const LOGO_SVG = `<svg viewBox="0 0 150 150" width="100%" height="100%">
@@ -223,11 +240,13 @@ async function api(action, payload){
     if(j.error === 'PIN ไม่ถูกต้อง') throw new Error(NO_ACCESS);
     throw new Error(j.error || 'เกิดข้อผิดพลาด');
   }
+  lastContact = Date.now();
   return j.data;
 }
 
 /* ===== SEARCH ===== */
 $('phone').addEventListener('input', e => {
+  warm();                                    // เริ่มพิมพ์เบอร์ = ปลุกระบบรอไว้
   const d = digits(e.target.value).slice(0, 10);
   e.target.value = fmtPhone(d);
   $('btnSearch').disabled = d.length !== 10;
@@ -355,8 +374,9 @@ renderSync();
 flushQueue();                                                          // ส่งรายการค้างจากครั้งก่อน (ถ้ามี)
 show('pSearch');
 $('phone').focus();
-api('ping').then(r => r && setPrices(r.prices))                      // ปลุกระบบ + ตรวจสิทธิ์ + โหลดราคาล่าสุด
-  .catch(e => { $('searchMsg').textContent = e.message; });
+warm(true);                                                            // ปลุกระบบ + ตรวจสิทธิ์ + โหลดราคาล่าสุด
+setInterval(() => { if(document.visibilityState === 'visible' && inOpenHours()) warm(); }, KEEP_WARM_MIN * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') warm(); });
 
 /* ===== Demo backend (ใช้เมื่อยังไม่ใส่ API_URL) ===== */
 const demoIdx = {
